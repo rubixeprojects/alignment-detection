@@ -76,9 +76,30 @@ kpt_shape: [2, 3]  # [number of keypoints, number of dims (x, y, visible)]
     
     print("Training complete. Model saved in runs/pose/wheel_alignment_run/weights/best.pt")
 
-def run_inference(image_path, model_path="runs/pose/wheel_alignment_run/weights/best.pt"):
+def evaluate_model(model_path="runs/pose/wheel_alignment_run/weights/best.pt"):
+    """
+    Evaluates the trained model on the validation dataset to test the training output instances.
+    This provides metrics like mAP (mean Average Precision) for both the bounding box and keypoints.
+    """
+    if not os.path.exists(model_path):
+        print(f"Model not found at {model_path}. Please train first.")
+        return
+
+    print(f"\\n--- Evaluating model: {model_path} ---")
+    model = YOLO(model_path)
+    
+    # Run validation on the test/val split defined in the yaml
+    metrics = model.val(data='wheel_alignment_pose.yaml')
+    
+    print("\\n--- Evaluation Results ---")
+    print(f"Box mAP50-95:  {metrics.box.map:.4f} (Accuracy of finding the wheel housing)")
+    print(f"Pose mAP50-95: {metrics.pose.map:.4f} (Accuracy of pinpointing the center and notch)")
+    print("--------------------------\\n")
+
+def run_inference(image_path, model_path="runs/pose/wheel_alignment_run/weights/best.pt", conf_threshold=0.6):
     """
     Runs inference using the trained model and calculates the alignment angle.
+    Includes confidence checking to provide specific reasons for NG results.
     """
     import math
     
@@ -89,24 +110,51 @@ def run_inference(image_path, model_path="runs/pose/wheel_alignment_run/weights/
     model = YOLO(model_path)
     results = model(image_path)
     
+    print(f"\\n--- Inference Report for {image_path} ---")
+    
     for r in results:
-        # Check if keypoints were detected
-        if r.keypoints is None or len(r.keypoints.xy) == 0:
-            print("No keypoints detected.")
+        # 1. Check if an object was even detected
+        if r.boxes is None or len(r.boxes) == 0:
+            print("Status: NG")
+            print("Reason: No wheel housing detected. The image might be completely washed out by glare or the part is missing.")
             continue
             
-        # Get the keypoints for the first detected object [0]
-        # xy is a tensor of shape (num_objects, num_keypoints, 2)
+        box_conf = float(r.boxes.conf[0].cpu().numpy())
+        
+        # 2. Check bounding box confidence
+        if box_conf < conf_threshold:
+            print("Status: NG")
+            print(f"Reason: Low overall detection confidence ({box_conf:.2f} < {conf_threshold}). The image quality is likely too poor (e.g., severe glare).")
+            continue
+
+        # 3. Check keypoints existence
+        if r.keypoints is None or len(r.keypoints.xy) == 0:
+            print("Status: NG")
+            print("Reason: Wheel housing detected, but keypoints (Center/Notch) could not be located.")
+            continue
+            
         keypoints = r.keypoints.xy[0].cpu().numpy() 
+        
+        # YOLOv8 pose models return keypoint confidences in r.keypoints.conf
+        kpt_confs = r.keypoints.conf[0].cpu().numpy() if r.keypoints.conf is not None else [1.0, 1.0]
         
         if len(keypoints) >= 2:
             center_x, center_y = keypoints[0]
             notch_x, notch_y = keypoints[1]
+            center_conf = float(kpt_confs[0])
+            notch_conf = float(kpt_confs[1])
             
-            print(f"Detected Center: ({center_x:.1f}, {center_y:.1f})")
-            print(f"Detected Notch:  ({notch_x:.1f}, {notch_y:.1f})")
+            print(f"Detected Center: ({center_x:.1f}, {center_y:.1f}) - Confidence: {center_conf:.2f}")
+            print(f"Detected Notch:  ({notch_x:.1f}, {notch_y:.1f}) - Confidence: {notch_conf:.2f}")
             
-            # Calculate angle (atan2)
+            # 4. Check keypoint confidence
+            if center_conf < conf_threshold or notch_conf < conf_threshold:
+                print("Status: NG")
+                print(f"Reason: Low confidence in exact alignment points (Center: {center_conf:.2f}, Notch: {notch_conf:.2f}). "
+                      "The notch might be obscured by glare, dirt, or out of focus.")
+                continue
+            
+            # 5. Calculate angle (atan2)
             dx = notch_x - center_x
             dy = center_y - notch_y  # Invert Y because image Y increases downwards
             
@@ -119,11 +167,20 @@ def run_inference(image_path, model_path="runs/pose/wheel_alignment_run/weights/
             
             # Assuming 90 degrees (pointing straight up) is OK
             is_ok = abs(angle_deg - 90.0) <= 5.0
-            print(f"Status: {'OK' if is_ok else 'NG'}")
+            
+            if is_ok:
+                print("Status: OK")
+                print("Reason: Notch is properly aligned within the 90 ± 5 degree tolerance.")
+            else:
+                print("Status: NG")
+                print(f"Reason: Angular misalignment. Detected angle {angle_deg:.1f} is outside the acceptable tolerance.")
 
 if __name__ == "__main__":
     print("Uncomment train_yolo_pose_model() to start training once your dataset is ready.")
     # train_yolo_pose_model()
     
-    # Example inference:
+    # To test the model on your validation dataset:
+    # evaluate_model()
+    
+    # Example inference on a single image:
     # run_inference("path_to_test_image.png")
