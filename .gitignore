@@ -3,3 +3,8 @@ images/
 *.pdf
 *.png
 __pycache__/
+debug_out/
+deployment.zip
+*.log
+*.pyc
+.DS_Store

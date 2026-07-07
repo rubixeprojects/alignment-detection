@@ -105,7 +105,7 @@ ok_correct = 0
 for path in ok_images:
     res, status = evaluate_image(path)
     if res: ok_correct += 1
-    # print(f"{os.path.basename(path)} -> {res} ({status})")
+    print(f"{os.path.basename(path)} -> {res} ({status})")
 print(f"OK Accuracy: {ok_correct}/{len(ok_images)}")
 
 print("\nEvaluating NG images (Expected: NG)")
@@ -113,5 +113,5 @@ ng_correct = 0
 for path in ng_images:
     res, status = evaluate_image(path)
     if not res: ng_correct += 1
-    # print(f"{os.path.basename(path)} -> {not res} ({status})")
+    print(f"{os.path.basename(path)} -> {not res} ({status})")
 print(f"NG Accuracy: {ng_correct}/{len(ng_images)}")
